@@ -1,0 +1,93 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+import matplotlib.pyplot as plt
+
+
+# 1. Load Data
+df = pd.read_csv('Maruti_daily_2007-03-01_2025-04-28.csv')  # <-- Replace with your file
+df['date'] = pd.to_datetime(df['date'])
+df = df.sort_values('date').reset_index(drop=True)
+
+# 2. Feature Columns
+feature_cols = ['open', 'high', 'low', 'close', 'vol', 'oi']
+
+# 3. Scaling Features
+scaler = MinMaxScaler()
+df[feature_cols] = scaler.fit_transform(df[feature_cols])
+
+# 4. Create Sequences
+n_past = 20  # use past 20 candles
+n_future = 1  # predict 1 next candle
+
+X, y = [], []
+
+for i in range(n_past, len(df) - n_future + 1):
+    X.append(df[feature_cols].iloc[i - n_past:i].values)
+    y.append(df[['open', 'high', 'low', 'close']].iloc[i + n_future - 1].values)
+
+X = np.array(X)
+y = np.array(y)
+
+print(f"Input shape: {X.shape}, Target shape: {y.shape}")
+
+# 5. Train/Test Split
+split = int(0.8 * len(X))
+X_train, X_test = X[:split], X[split:]
+y_train, y_test = y[:split], y[split:]
+
+# 6. Build LSTM Model
+model = Sequential()
+model.add(LSTM(64, activation='relu', input_shape=(n_past, len(feature_cols))))
+model.add(Dense(32, activation='relu'))
+model.add(Dense(4))  # Predict OHLC
+model.compile(optimizer='adam', loss='mse')
+
+# 7. Train
+history = model.fit(X_train, y_train, epochs=30, batch_size=32, validation_split=0.1)
+
+# 8. Evaluate
+loss = model.evaluate(X_test, y_test)
+print(f"Test Loss (MSE): {loss:.4f}")
+
+# 9. Predict
+y_pred = model.predict(X_test)
+
+# 10. Plot True vs Predicted Close price (example)
+plt.figure(figsize=(12, 6))
+plt.plot(y_test[:, 3], label='True Close')
+plt.plot(y_pred[:, 3], label='Predicted Close')
+plt.legend()
+plt.title('True vs Predicted Close Price')
+plt.show()
+
+
+
+# --- Predict the next unseen (future) 30-min candle ---
+
+# 1. Take the last 20 candles from your entire data
+latest_sequence = df[feature_cols].iloc[-n_past:].values  # shape (20, 6)
+
+# 2. Reshape for model
+latest_sequence = np.expand_dims(latest_sequence, axis=0)  # shape (1, 20, 6)
+
+# 3. Predict
+predicted_candle_scaled = model.predict(latest_sequence)
+
+# 4. Inverse transform (bring back original price scale)
+# Create a temporary dataframe to fit scaler inverse
+temp = np.zeros((1, len(feature_cols)))
+temp[0, :4] = predicted_candle_scaled  # Only fill OHLC
+
+predicted_candle = scaler.inverse_transform(temp)[0][:4]  # Take only OHLC
+
+# 5. Show predicted next 30-min OHLC
+predicted_open, predicted_high, predicted_low, predicted_close = predicted_candle
+
+print(f"\n📈 Predicted Next 30-min Candle:")
+print(f"Open : {predicted_open:.2f}")
+print(f"High : {predicted_high:.2f}")
+print(f"Low  : {predicted_low:.2f}")
+print(f"Close: {predicted_close:.2f}")
